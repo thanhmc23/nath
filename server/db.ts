@@ -1,0 +1,1003 @@
+import fs from 'fs';
+import path from 'path';
+import {
+  Question,
+  SourceDocument,
+  SubjectRule,
+  ExamTemplate,
+  Exam,
+  ExamSubmission,
+  DashboardStats,
+} from '../src/types/index.ts';
+
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+
+export interface DatabaseSchema {
+  questions: Question[];
+  documents: SourceDocument[];
+  subjectRules: SubjectRule[];
+  templates: ExamTemplate[];
+  exams: Exam[];
+  submissions: ExamSubmission[];
+  auditLogs: { id: string; timestamp: string; action: string; user: string; details: string }[];
+}
+
+// Initial realistic subject rules aligned with Vietnamese education system
+const INITIAL_SUBJECT_RULES: SubjectRule[] = [
+  {
+    id: 'sub-toan',
+    code: 'TOAN',
+    name: 'Toán học',
+    gradeLevels: ['Lớp 10', 'Lớp 11', 'Lớp 12'],
+    referenceCurriculum: 'Chương trình GDPT 2018 (Kết nối tri thức / Cánh diều / Chân trời sáng tạo)',
+    chapters: [
+      { id: 'toan-c1', name: 'Ứng dụng đạo hàm để khảo sát hàm số', topics: ['Đơn điệu hàm số', 'Cực trị', 'Giá trị lớn nhất, nhỏ nhất', 'Tiệm cận', 'Khảo sát và vẽ đồ thị'] },
+      { id: 'toan-c2', name: 'Nguyên hàm, tích phân và ứng dụng', topics: ['Nguyên hàm cơ bản', 'Phương pháp đổi biến & từng phần', 'Tích phân xác định', 'Ứng dụng diện tích & thể tích'] },
+      { id: 'toan-c3', name: 'Hình học không gian Oxyz', topics: ['Hệ tọa độ Oxyz', 'Phương trình mặt phẳng', 'Phương trình đường thẳng', 'Phương trình mặt cầu', 'Khoảng cách & góc'] },
+      { id: 'toan-c4', name: 'Xác suất và thống kê', topics: ['Quy tắc đếm', 'Biến cố và xác suất', 'Xác suất có điều kiện', 'Công thức Bayes'] }
+    ],
+    supportedQuestionTypes: ['single_choice', 'true_false', 'short_answer', 'essay'],
+    defaultDifficultyRatio: { nhan_biet: 30, thong_hieu: 40, van_dung: 20, van_dung_cao: 10 },
+    scoringPolicy: {
+      totalPoints: 10,
+      rounding: 0.25,
+      singleChoicePoints: 0.25,
+      multipleChoicePolicy: 'all_or_nothing',
+      trueFalsePolicy: 'per_proposition',
+      shortAnswerNormalize: true
+    },
+    mathFormulaSupport: true,
+    solvingGuidelines: 'Trình bày rõ các bước biến đổi, công thức toán học (sử dụng chuẩn LaTeX), tập xác định, điều kiện có nghiệm và biện luận chặt chẽ.',
+    essayRubricCriteria: ['Tính chính xác của kết quả', 'Phương pháp giải và lập luận logic', 'Trình bày biến đổi toán học', 'Kiểm tra điều kiện xác định']
+  },
+  {
+    id: 'sub-ly',
+    code: 'VATLY',
+    name: 'Vật lý',
+    gradeLevels: ['Lớp 10', 'Lớp 11', 'Lớp 12'],
+    referenceCurriculum: 'Chương trình GDPT 2018',
+    chapters: [
+      { id: 'ly-c1', name: 'Vật lý nhiệt', topics: ['Mô hình động học phân tử', 'Nội năng và định luật I nhiệt động lực học', 'Nhiệt độ và thang đo', 'Nhiệt dung riêng & nhiệt hóa hơi'] },
+      { id: 'ly-c2', name: 'Khí lý tưởng', topics: ['Định luật Boyle', 'Định luật Charles', 'Phương trình trạng thái Clapeyron - Mendeleev'] },
+      { id: 'ly-c3', name: 'Từ trường', topics: ['Cảm ứng từ', 'Lực từ tác dụng lên đoạn dây dẫn', 'Cảm ứng điện từ & Định luật Faraday'] },
+      { id: 'ly-c4', name: 'Vật lý hạt nhân', topics: ['Cấu tạo hạt nhân', 'Độ hụt khối & năng lượng liên kết', 'Phóng xạ & chu kỳ bán rã'] }
+    ],
+    supportedQuestionTypes: ['single_choice', 'true_false', 'short_answer', 'essay'],
+    defaultDifficultyRatio: { nhan_biet: 35, thong_hieu: 35, van_dung: 20, van_dung_cao: 10 },
+    scoringPolicy: {
+      totalPoints: 10,
+      rounding: 0.25,
+      singleChoicePoints: 0.25,
+      multipleChoicePolicy: 'all_or_nothing',
+      trueFalsePolicy: 'per_proposition',
+      shortAnswerNormalize: true
+    },
+    mathFormulaSupport: true,
+    solvingGuidelines: 'Bảo toàn ký hiệu vật lý, đơn vị SI, nêu định luật áp dụng, viết công thức gốc, thay số có kèm đơn vị và ghi rõ kết luận.',
+    essayRubricCriteria: ['Nêu đúng định luật vật lý', 'Công thức tổng quát', 'Thay số và đổi đơn vị chính xác', 'Kết luận kèm đơn vị SI']
+  },
+  {
+    id: 'sub-hoa',
+    code: 'HOAHOC',
+    name: 'Hóa học',
+    gradeLevels: ['Lớp 10', 'Lớp 11', 'Lớp 12'],
+    referenceCurriculum: 'Chương trình GDPT 2018',
+    chapters: [
+      { id: 'hoa-c1', name: 'Este - Lipit - Xà phòng', topics: ['Khái niệm, danh pháp Este', 'Tính chất hóa học thủy phân', 'Lipit & chất béo', 'Chỉ số xà phòng'] },
+      { id: 'hoa-c2', name: 'Carbohydrate', topics: ['Glucose và Fructose', 'Saccharose và Maltose', 'Tinh bột và Cellulose'] },
+      { id: 'hoa-c3', name: 'Hợp chất chứa Nitrogen', topics: ['Amine & Aniline', 'Amino acid & Peptit', 'Protein & Enzyme'] },
+      { id: 'hoa-c4', name: 'Kim loại chuyển tiếp & Phức chất', topics: ['Đại cương kim loại', 'Ăn mòn kim loại', 'Phức chất cơ bản'] }
+    ],
+    supportedQuestionTypes: ['single_choice', 'multiple_choice', 'true_false', 'short_answer', 'matching_or_fill'],
+    defaultDifficultyRatio: { nhan_biet: 30, thong_hieu: 40, van_dung: 20, van_dung_cao: 10 },
+    scoringPolicy: {
+      totalPoints: 10,
+      rounding: 0.25,
+      singleChoicePoints: 0.25,
+      multipleChoicePolicy: 'partial_credit',
+      trueFalsePolicy: 'per_proposition',
+      shortAnswerNormalize: true
+    },
+    mathFormulaSupport: true,
+    solvingGuidelines: 'Viết phương trình hóa học đầy đủ điều kiện xúc tác và hệ số cân bằng, lập sơ đồ phản ứng, bảo toàn khối lượng/electron.',
+    essayRubricCriteria: ['Viết đúng PTHH và điều kiện', 'Đặt ẩn và lập hệ phương trình', 'Tính toán khối lượng / nồng độ mol', 'Biện luận công thức cấu tạo']
+  },
+  {
+    id: 'sub-anh',
+    code: 'TIENGANH',
+    name: 'Tiếng Anh',
+    gradeLevels: ['Lớp 10', 'Lớp 11', 'Lớp 12'],
+    referenceCurriculum: 'Global Success / Friends Global / English 12',
+    chapters: [
+      { id: 'anh-c1', name: 'Grammar & Syntax', topics: ['Tenses', 'Passive Voice', 'Relative Clauses', 'Conditionals', 'Inversion & Emphasis'] },
+      { id: 'anh-c2', name: 'Vocabulary & Collocations', topics: ['Life Stories', 'Urbanisation', 'Green Living', 'Artificial Intelligence', 'Lifelong Learning'] },
+      { id: 'anh-c3', name: 'Reading Comprehension', topics: ['Main Idea & Skimming', 'Inference & Context Clues', 'Vocabulary in Context'] },
+      { id: 'anh-c4', name: 'Communication & Writing', topics: ['Everyday Conversations', 'Sentence Transformation', 'Writing Paragraphs'] }
+    ],
+    supportedQuestionTypes: ['single_choice', 'true_false', 'short_answer', 'matching_or_fill', 'essay'],
+    defaultDifficultyRatio: { nhan_biet: 40, thong_hieu: 30, van_dung: 20, van_dung_cao: 10 },
+    scoringPolicy: {
+      totalPoints: 10,
+      rounding: 0.2,
+      singleChoicePoints: 0.2,
+      multipleChoicePolicy: 'all_or_nothing',
+      trueFalsePolicy: 'per_proposition',
+      shortAnswerNormalize: true
+    },
+    mathFormulaSupport: false,
+    solvingGuidelines: 'Giải thích ngữ pháp cụ thể, phân tích ngữ cảnh câu và loại trừ các bẫy trắc nghiệm.',
+    essayRubricCriteria: ['Task Achievement', 'Coherence & Cohesion', 'Lexical Resource', 'Grammatical Range & Accuracy']
+  },
+  {
+    id: 'sub-van',
+    code: 'NGUVAN',
+    name: 'Ngữ văn',
+    gradeLevels: ['Lớp 10', 'Lớp 11', 'Lớp 12'],
+    referenceCurriculum: 'Chương trình GDPT 2018',
+    chapters: [
+      { id: 'van-c1', name: 'Đọc hiểu văn bản', topics: ['Văn bản thông tin', 'Văn bản nghị luận', 'Văn bản văn học (thơ, truyện, kịch)'] },
+      { id: 'van-c2', name: 'Nghị luận xã hội', topics: ['Nghị luận về một tư tưởng, đạo lý', 'Nghị luận về một hiện tượng đời sống'] },
+      { id: 'van-c3', name: 'Nghị luận văn học', topics: ['Phân tích nhân vật, chi tiết', 'Đánh giá nghệ thuật và chủ đề'] }
+    ],
+    supportedQuestionTypes: ['short_answer', 'essay', 'true_false'],
+    defaultDifficultyRatio: { nhan_biet: 25, thong_hieu: 35, van_dung: 25, van_dung_cao: 15 },
+    scoringPolicy: {
+      totalPoints: 10,
+      rounding: 0.25,
+      singleChoicePoints: 0.5,
+      multipleChoicePolicy: 'all_or_nothing',
+      trueFalsePolicy: 'whole_question',
+      shortAnswerNormalize: false
+    },
+    mathFormulaSupport: false,
+    solvingGuidelines: 'Bảo toàn ngữ liệu gốc, chấm theo thang tiêu chí Rubric linh hoạt, tôn trọng suy nghĩ sáng tạo và tính nhân văn.',
+    essayRubricCriteria: ['Đúng cấu trúc bài nghị luận', 'Xác định đúng vấn đề nghị luận', 'Triển khai luận điểm rõ ràng, lập luận thuyết phục', 'Chính tả, dùng từ, diễn đạt, sáng tạo']
+  }
+];
+
+// Rich set of authentic starter questions across question types
+const INITIAL_QUESTIONS: Question[] = [
+  {
+    id: 'q-toan-01',
+    code: 'TOAN12-C1-001',
+    content: 'Cho hàm số $y = f(x)$ có bảng biến thiên như hình vẽ. Hàm số đã cho đồng biến trên khoảng nào dưới đây?',
+    questionType: 'single_choice',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Đơn điệu hàm số',
+    chapter: 'Ứng dụng đạo hàm để khảo sát hàm số',
+    difficulty: 'nhan_biet',
+    defaultPoints: 0.25,
+    options: [
+      { id: 'A', content: '$(-\\infty; -1)$', isCorrect: false },
+      { id: 'B', content: '$(-1; 1)$', isCorrect: false },
+      { id: 'C', content: '$(0; 2)$', isCorrect: true },
+      { id: 'D', content: '$(2; +\\infty)$', isCorrect: false }
+    ],
+    correctAnswers: ['C'],
+    explanation: 'Dựa vào bảng biến thiên hoặc dấu đạo hàm $y\' > 0$ trên $(0; 2)$, hàm số đồng biến trên khoảng $(0; 2)$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 1,
+    sourcePosition: 'Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 98,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-toan-02',
+    code: 'TOAN12-C1-002',
+    content: 'Tìm giá trị lớn nhất của hàm số $f(x) = x^3 - 3x + 2$ trên đoạn $[0; 2]$.',
+    questionType: 'single_choice',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Giá trị lớn nhất, nhỏ nhất',
+    chapter: 'Ứng dụng đạo hàm để khảo sát hàm số',
+    difficulty: 'thong_hieu',
+    defaultPoints: 0.25,
+    options: [
+      { id: 'A', content: '$\\max_{[0;2]} f(x) = 2$', isCorrect: false },
+      { id: 'B', content: '$\\max_{[0;2]} f(x) = 4$', isCorrect: true },
+      { id: 'C', content: '$\\max_{[0;2]} f(x) = 0$', isCorrect: false },
+      { id: 'D', content: '$\\max_{[0;2]} f(x) = 1$', isCorrect: false }
+    ],
+    correctAnswers: ['B'],
+    explanation: 'Ta có $f\'(x) = 3x^2 - 3 = 0 \\iff x = 1$ (do $x \\in [0; 2]$). Ta tính $f(0) = 2$, $f(1) = 0$, $f(2) = 2^3 - 3(2) + 2 = 4$. Do đó giá trị lớn nhất là 4.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 1,
+    sourcePosition: 'Câu 2',
+    verificationStatus: 'verified',
+    confidenceScore: 99,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-toan-03',
+    code: 'TOAN12-TF-001',
+    content: 'Cho hàm số $y = f(x) = \\frac{2x - 1}{x + 1}$ có đồ thị là $(C)$. Xét tính đúng/sai của các khẳng định sau:',
+    questionType: 'true_false',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Tiệm cận',
+    chapter: 'Ứng dụng đạo hàm để khảo sát hàm số',
+    difficulty: 'thong_hieu',
+    defaultPoints: 1.0,
+    trueFalseScoringMode: 'per_proposition',
+    propositions: [
+      { id: 'a', statement: 'Đồ thị $(C)$ có tiệm cận đứng là đường thẳng $x = -1$.', isCorrect: true, explanation: 'Nghiệm mẫu số $x + 1 = 0 \\Rightarrow x = -1$.' },
+      { id: 'b', statement: 'Đồ thị $(C)$ có tiệm cận ngang là đường thẳng $y = 1$.', isCorrect: false, explanation: 'Tiệm cận ngang là $y = \\lim_{x \\to \\pm \\infty} \\frac{2x-1}{x+1} = 2$. Khẳng định sai.' },
+      { id: 'c', statement: 'Hàm số đã cho đồng biến trên từng khoảng xác định $(-\\infty; -1)$ và $(-1; +\\infty)$.', isCorrect: true, explanation: '$y\' = \\frac{2(1) - (-1)(1)}{(x+1)^2} = \\frac{3}{(x+1)^2} > 0, \\forall x \\ne -1$.' },
+      { id: 'd', statement: 'Giao điểm của hai đường tiệm cận là điểm $I(2; -1)$.', isCorrect: false, explanation: 'Tâm đối xứng $I$ là giao điểm hai tiệm cận có tọa độ $(-1; 2)$.' }
+    ],
+    explanation: 'Phân tích hàm phân thức bậc nhất trên bậc nhất $y = \\frac{ax+b}{cx+d}$ có TCĐ $x = -d/c$, TCN $y = a/c$, đạo hàm $ad-bc/(cx+d)^2$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 2,
+    sourcePosition: 'Phần II - Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 96,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-toan-04',
+    code: 'TOAN12-SA-001',
+    content: 'Trong không gian $Oxyz$, cho điểm $A(1; 2; 3)$ và mặt phẳng $(P): 2x - 2y + z + 5 = 0$. Tính khoảng cách từ điểm $A$ đến mặt phẳng $(P)$. (Nhập kết quả là số nguyên hoặc số thập phân)',
+    questionType: 'short_answer',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Khoảng cách & góc',
+    chapter: 'Hình học không gian Oxyz',
+    difficulty: 'thong_hieu',
+    defaultPoints: 0.5,
+    acceptedAnswers: ['2', '2.0', '2,0'],
+    numericalTolerance: 0.01,
+    unit: '',
+    explanation: '$d(A, (P)) = \\frac{|2(1) - 2(2) + 1(3) + 5|}{\\sqrt{2^2 + (-2)^2 + 1^2}} = \\frac{|2 - 4 + 3 + 5|}{\\sqrt{4 + 4 + 1}} = \\frac{6}{3} = 2$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 3,
+    sourcePosition: 'Phần III - Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 97,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-toan-05',
+    code: 'TOAN12-VD-001',
+    content: 'Một bác nông dân có một tấm lưới thép dài 60m để rào một khu vườn hình chữ nhật sát một bờ sông thẳng (bờ sông không cần rào). Hỏi diện tích lớn nhất của mảnh vườn bác nông dân có thể rào được là bao nhiêu mét vuông?',
+    questionType: 'short_answer',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Giá trị lớn nhất, nhỏ nhất',
+    chapter: 'Ứng dụng đạo hàm để khảo sát hàm số',
+    difficulty: 'van_dung',
+    defaultPoints: 0.5,
+    acceptedAnswers: ['450', '450m2', '450 m2'],
+    numericalTolerance: 0.1,
+    unit: 'm2',
+    explanation: 'Gọi chiều rộng hai cạnh bên là $x$ ($0 < x < 30$), chiều dài cạnh đối diện bờ sông là $60 - 2x$. Diện tích $S(x) = x(60 - 2x) = 60x - 2x^2$. Đạo hàm $S\'(x) = 60 - 4x = 0 \\iff x = 15$. Khi đó diện tích lớn nhất là $S(15) = 15(30) = 450 \\text{ m}^2$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 3,
+    sourcePosition: 'Phần III - Câu 2',
+    verificationStatus: 'verified',
+    confidenceScore: 95,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-toan-06',
+    code: 'TOAN12-VDC-001',
+    content: 'Có bao nhiêu giá trị nguyên của tham số $m \\in [-10; 10]$ để đồ thị hàm số $y = x^3 - 3mx^2 + 3(m^2 - 1)x - m^3 + m$ có hai điểm cực trị nằm về hai phía của trục hoành?',
+    questionType: 'single_choice',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    topic: 'Cực trị',
+    chapter: 'Ứng dụng đạo hàm để khảo sát hàm số',
+    difficulty: 'van_dung_cao',
+    defaultPoints: 0.25,
+    options: [
+      { id: 'A', content: '19', isCorrect: false },
+      { id: 'B', content: '20', isCorrect: false },
+      { id: 'C', content: '21', isCorrect: true },
+      { id: 'D', content: '18', isCorrect: false }
+    ],
+    correctAnswers: ['C'],
+    explanation: 'Ta có $y\' = 3(x^2 - 2mx + m^2 - 1) = 3[(x-m)^2 - 1] = 0 \\iff x = m \\pm 1$. Tính các giá trị cực trị $y_1, y_2$ và xét điều kiện $y_1 \\cdot y_2 < 0$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-01',
+    sourceDocumentName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    sourcePage: 4,
+    sourcePosition: 'Câu 48',
+    verificationStatus: 'verified',
+    confidenceScore: 92,
+    createdAt: '2026-10-10T08:00:00.000Z',
+    updatedAt: '2026-10-10T08:30:00.000Z'
+  },
+  {
+    id: 'q-ly-01',
+    code: 'VATLY12-C1-001',
+    content: 'Nhiệt dung riêng của một chất là gì?',
+    questionType: 'single_choice',
+    subjectId: 'sub-ly',
+    subjectName: 'Vật lý',
+    topic: 'Nhiệt dung riêng & nhiệt hóa hơi',
+    chapter: 'Vật lý nhiệt',
+    difficulty: 'nhan_biet',
+    defaultPoints: 0.25,
+    options: [
+      { id: 'A', content: 'Nhiệt lượng cần truyền cho 1 kg chất đó để nhiệt độ tăng thêm 1 K (hoặc 1 °C)', isCorrect: true },
+      { id: 'B', content: 'Nhiệt lượng cần truyền cho một khối chất để nóng chảy hoàn toàn', isCorrect: false },
+      { id: 'C', content: 'Năng lượng tỏa ra khi 1 lít chất lỏng hóa hơi', isCorrect: false },
+      { id: 'D', content: 'Đại lượng đo tốc độ truyền nhiệt qua tiết diện 1 m²', isCorrect: false }
+    ],
+    correctAnswers: ['A'],
+    explanation: 'Theo định nghĩa trong SGK Vật lý 12 mới: Nhiệt dung riêng $c$ là nhiệt lượng cần cung cấp để 1 kg chất đó tăng nhiệt độ thêm $1^\\circ\\text{C}$ (hoặc $1\\text{ K}$): $Q = mc\\Delta T$.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-02',
+    sourceDocumentName: 'De_Kiem_Tra_Dinh_Ky_Vat_Ly_12.docx',
+    sourcePage: 1,
+    sourcePosition: 'Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 99,
+    createdAt: '2026-10-11T09:00:00.000Z',
+    updatedAt: '2026-10-11T09:30:00.000Z'
+  },
+  {
+    id: 'q-ly-02',
+    code: 'VATLY12-TF-001',
+    content: 'Một khối khí lý tưởng xác định được nhốt trong một xilanh kín có pít-tông di động. Khi pít-tông nén khí từ từ ở nhiệt độ không đổi, xét tính đúng sai của các nhận định sau:',
+    questionType: 'true_false',
+    subjectId: 'sub-ly',
+    subjectName: 'Vật lý',
+    topic: 'Định luật Boyle',
+    chapter: 'Khí lý tưởng',
+    difficulty: 'thong_hieu',
+    defaultPoints: 1.0,
+    trueFalseScoringMode: 'per_proposition',
+    propositions: [
+      { id: 'a', statement: 'Áp suất của khối khí tăng tỉ lệ nghịch với thể tích của nó.', isCorrect: true, explanation: 'Theo định luật Boyle: $p \\cdot V = \\text{const} \\Rightarrow p \\propto \\frac{1}{V}$.' },
+      { id: 'b', statement: 'Nội năng của khối khí tăng lên do nhận công từ ngoại lực.', isCorrect: false, explanation: 'Quá trình đẳng nhiệt ($T = \\text{const}$), mà nội năng khí lý tưởng chỉ phụ thuộc nhiệt độ, nên nội năng không đổi.' },
+      { id: 'c', statement: 'Mật độ phân tử chất khí trong xilanh tăng lên.', isCorrect: true, explanation: 'Thể tích giảm, số hạt không đổi nên $n = N/V$ tăng.' },
+      { id: 'd', statement: 'Động năng tịnh tiến trung bình của các phân tử khí tăng lên.', isCorrect: false, explanation: 'Động năng trung bình $\\bar{E_d} = \\frac{3}{2}kT$ chỉ phụ thuộc $T$, vì đẳng nhiệt nên động năng trung bình không đổi.' }
+    ],
+    explanation: 'Quá trình đẳng nhiệt tuân theo định luật Boyle, nhiệt độ không đổi thì động năng phân tử và nội năng khí lý tưởng không thay đổi.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-02',
+    sourceDocumentName: 'De_Kiem_Tra_Dinh_Ky_Vat_Ly_12.docx',
+    sourcePage: 2,
+    sourcePosition: 'Câu 15 (Đúng/Sai)',
+    verificationStatus: 'verified',
+    confidenceScore: 95,
+    createdAt: '2026-10-11T09:00:00.000Z',
+    updatedAt: '2026-10-11T09:30:00.000Z'
+  },
+  {
+    id: 'q-hoa-01',
+    code: 'HOA12-C1-001',
+    content: 'Este $CH_3COOCH_3$ có tên gọi thông thường là gì?',
+    questionType: 'single_choice',
+    subjectId: 'sub-hoa',
+    subjectName: 'Hóa học',
+    topic: 'Khái niệm, danh pháp Este',
+    chapter: 'Este - Lipit - Xà phòng',
+    difficulty: 'nhan_biet',
+    defaultPoints: 0.25,
+    options: [
+      { id: 'A', content: 'Ethyl acetate', isCorrect: false },
+      { id: 'B', content: 'Methyl acetate', isCorrect: true },
+      { id: 'C', content: 'Methyl formate', isCorrect: false },
+      { id: 'D', content: 'Ethyl formate', isCorrect: false }
+    ],
+    correctAnswers: ['B'],
+    explanation: 'Gốc ancol $-CH_3$ là methyl, gốc axit $CH_3COO-$ là acetate $\\rightarrow$ tên gọi là Methyl acetate.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-03',
+    sourceDocumentName: 'Ngan_Hang_Cau_Hoi_Hoa_Hoc_12.docx',
+    sourcePage: 1,
+    sourcePosition: 'Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 100,
+    createdAt: '2026-10-12T10:00:00.000Z',
+    updatedAt: '2026-10-12T10:00:00.000Z'
+  },
+  {
+    id: 'q-hoa-02',
+    code: 'HOA12-MC-001',
+    content: 'Những chất nào sau đây có khả năng tham gia phản ứng tráng bạc với dung dịch $AgNO_3$ trong $NH_3$ đun nóng? (Chọn tất cả các chất đúng)',
+    questionType: 'multiple_choice',
+    subjectId: 'sub-hoa',
+    subjectName: 'Hóa học',
+    topic: 'Glucose và Fructose',
+    chapter: 'Carbohydrate',
+    difficulty: 'thong_hieu',
+    defaultPoints: 0.5,
+    options: [
+      { id: 'A', content: 'Glucose', isCorrect: true },
+      { id: 'B', content: 'Fructose', isCorrect: true },
+      { id: 'C', content: 'Saccharose', isCorrect: false },
+      { id: 'D', content: 'Formaldehyde ($HCHO$)', isCorrect: true },
+      { id: 'E', content: 'Tinh bột', isCorrect: false }
+    ],
+    correctAnswers: ['A', 'B', 'D'],
+    explanation: 'Glucose và formaldehyde chứa nhóm $-CHO$ tráng bạc trực tiếp. Fructose trong môi trường kiềm $NH_3$ chuyển hóa thuận nghịch thành Glucose nên cũng tráng bạc. Saccharose và tinh bột không tráng bạc.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-03',
+    sourceDocumentName: 'Ngan_Hang_Cau_Hoi_Hoa_Hoc_12.docx',
+    sourcePage: 2,
+    sourcePosition: 'Câu 8 (Nhiều đáp án)',
+    verificationStatus: 'verified',
+    confidenceScore: 98,
+    createdAt: '2026-10-12T10:00:00.000Z',
+    updatedAt: '2026-10-12T10:00:00.000Z'
+  },
+  {
+    id: 'q-anh-01',
+    code: 'ENG12-C1-001',
+    content: 'If renewable energy resources _______ more widely, we would be able to reduce carbon emissions significantly.',
+    questionType: 'single_choice',
+    subjectId: 'sub-anh',
+    subjectName: 'Tiếng Anh',
+    topic: 'Conditionals',
+    chapter: 'Grammar & Syntax',
+    difficulty: 'thong_hieu',
+    defaultPoints: 0.2,
+    options: [
+      { id: 'A', content: 'are used', isCorrect: false },
+      { id: 'B', content: 'were used', isCorrect: true },
+      { id: 'C', content: 'had been used', isCorrect: false },
+      { id: 'D', content: 'will be used', isCorrect: false }
+    ],
+    correctAnswers: ['B'],
+    explanation: 'Second conditional (unreal in the present/future): If + S + V-ed / were (passive: were used), S + would + V-bare.',
+    hasFormulas: false,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-04',
+    sourceDocumentName: 'English_12_Mock_Exam_Term1.pdf',
+    sourcePage: 1,
+    sourcePosition: 'Item 12',
+    verificationStatus: 'verified',
+    confidenceScore: 99,
+    createdAt: '2026-10-13T14:00:00.000Z',
+    updatedAt: '2026-10-13T14:00:00.000Z'
+  },
+  {
+    id: 'q-anh-02',
+    code: 'ENG12-MATCH-001',
+    content: 'Ghép nối từ vựng về môi trường ở cột bên trái với định nghĩa phù hợp ở cột bên phải:',
+    questionType: 'matching_or_fill',
+    subjectId: 'sub-anh',
+    subjectName: 'Tiếng Anh',
+    topic: 'Green Living',
+    chapter: 'Vocabulary & Collocations',
+    difficulty: 'thong_hieu',
+    defaultPoints: 1.0,
+    matchingPairs: [
+      { left: '1. Carbon footprint', right: 'Amount of greenhouse gases produced by our activities' },
+      { left: '2. Biodegradable', right: 'Capable of being decomposed naturally by bacteria' },
+      { left: '3. Deforestation', right: 'The large-scale clearing of forest areas' },
+      { left: '4. Renewable energy', right: 'Energy collected from clean natural resources that replenish' }
+    ],
+    explanation: 'Nắm vững các thuật ngữ sinh thái học trong bài Unit 2 Tiếng Anh 12.',
+    hasFormulas: false,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-04',
+    sourceDocumentName: 'English_12_Mock_Exam_Term1.pdf',
+    sourcePage: 2,
+    sourcePosition: 'Section Matching',
+    verificationStatus: 'verified',
+    confidenceScore: 97,
+    createdAt: '2026-10-13T14:00:00.000Z',
+    updatedAt: '2026-10-13T14:00:00.000Z'
+  },
+  {
+    id: 'q-van-01',
+    code: 'VAN12-ESSAY-001',
+    content: 'Viết một đoạn văn nghị luận xã hội (khoảng 200 chữ) trình bày suy nghĩ của anh/chị về ý nghĩa của "tinh thần tự học và chủ động thích ứng" của người trẻ trong kỷ nguyên trí tuệ nhân tạo (AI).',
+    questionType: 'essay',
+    subjectId: 'sub-van',
+    subjectName: 'Ngữ văn',
+    topic: 'Nghị luận về một tư tưởng, đạo lý',
+    chapter: 'Nghị luận xã hội',
+    difficulty: 'van_dung',
+    defaultPoints: 2.0,
+    sampleAnswer: 'Mở đoạn: Nêu vấn đề về vai trò của tinh thần tự học và chủ động thích ứng trước làn sóng AI. Thân đoạn: Giải thích tự học là năng lực tự tìm tòi, cập nhật tri thức; thích ứng là biến chuyển linh hoạt. Ý nghĩa: Giúp người trẻ không bị đào thải, làm chủ công nghệ thay vì lệ thuộc, mở rộng cơ hội phát triển. Dẫn chứng thực tế và phản đề. Kết đoạn: Bài học hành động và thông điệp.',
+    gradingRubric: [
+      { criteria: 'Đảm bảo cấu trúc đoạn văn nghị luận (200 chữ)', points: 0.25, description: 'Có mở đoạn, thân đoạn, kết đoạn mạch lạc' },
+      { criteria: 'Xác định đúng vấn đề nghị luận', points: 0.25, description: 'Đúng tinh thần tự học và chủ động thích ứng trong thời đại AI' },
+      { criteria: 'Triển khai luận điểm và lập luận', points: 1.0, description: 'Lập luận thuyết phục, có dẫn chứng thực tế, phân tích sâu sắc' },
+      { criteria: 'Chính tả, ngữ pháp và sáng tạo', points: 0.5, description: 'Dùng từ trong sáng, có góc nhìn độc đáo, giàu cảm xúc' }
+    ],
+    hasFormulas: false,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-05',
+    sourceDocumentName: 'De_Thi_Gk1_Ngu_Van_12.pdf',
+    sourcePage: 2,
+    sourcePosition: 'Phần Làm văn - Câu 1',
+    verificationStatus: 'verified',
+    confidenceScore: 95,
+    createdAt: '2026-10-14T08:00:00.000Z',
+    updatedAt: '2026-10-14T08:00:00.000Z'
+  },
+  {
+    id: 'q-review-01',
+    code: 'DOC-REVIEW-001',
+    content: 'Đun nóng 0,1 mol hỗn hợp gồm hai este đơn chức mạch hở cần vừa đủ 150ml dung dịch NaOH 1M, thu được muối và hỗn hợp hai ancol đồng đẳng kế tiếp. Xác định công thức cấu tạo của hai este.',
+    questionType: 'essay',
+    subjectId: 'sub-hoa',
+    subjectName: 'Hóa học',
+    topic: 'Tính chất hóa học thủy phân',
+    chapter: 'Este - Lipit - Xà phòng',
+    difficulty: 'van_dung',
+    defaultPoints: 1.0,
+    explanation: 'Tỷ lệ nNaOH / neste = 0,15 / 0,1 = 1,5 cho thấy hỗn hợp chứa 1 este của phenol hoặc este thông thường phản ứng đặc biệt.',
+    hasFormulas: true,
+    hasImages: false,
+    sourceDocumentId: 'doc-seed-03',
+    sourceDocumentName: 'Ngan_Hang_Cau_Hoi_Hoa_Hoc_12.docx',
+    sourcePage: 3,
+    sourcePosition: 'Bài tập 12 (Trích xuất từ file)',
+    verificationStatus: 'needs_review',
+    confidenceScore: 78,
+    reviewNote: 'Dữ liệu trích xuất từ văn bản scan cần người dùng đối chiếu lại đề bài gốc để xác minh số mol muối.',
+    createdAt: '2026-10-14T11:00:00.000Z',
+    updatedAt: '2026-10-14T11:00:00.000Z'
+  }
+];
+
+// Seed templates according to the new Vietnamese GDPT 2018 structure
+const INITIAL_TEMPLATES: ExamTemplate[] = [
+  {
+    id: 'tmpl-toan-thpt-2026',
+    name: 'Đề thi chuẩn cấu trúc Bộ GD&ĐT (Toán 12 - 3 phần)',
+    description: 'Cấu trúc ma trận chuẩn mới: Phần I (12 câu trắc nghiệm 4 lựa chọn), Phần II (4 câu Đúng/Sai nhiều mệnh đề), Phần III (6 câu Trả lời ngắn).',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    gradeLevel: 'Lớp 12',
+    totalQuestions: 22,
+    durationMinutes: 90,
+    totalPoints: 10,
+    sections: [
+      {
+        id: 'sec-1',
+        title: 'Phần I: Câu hỏi trắc nghiệm nhiều phương án lựa chọn (Thí sinh chọn 1 phương án đúng)',
+        questionType: 'single_choice',
+        questionCount: 12,
+        pointsPerQuestion: 0.25,
+        difficultyRatio: { nhan_biet: 50, thong_hieu: 40, van_dung: 10, van_dung_cao: 0 }
+      },
+      {
+        id: 'sec-2',
+        title: 'Phần II: Câu hỏi trắc nghiệm Đúng/Sai (Mỗi câu gồm 4 mệnh đề a, b, c, d)',
+        questionType: 'true_false',
+        questionCount: 4,
+        pointsPerQuestion: 1.0,
+        trueFalseCountMode: 'per_question',
+        difficultyRatio: { nhan_biet: 25, thong_hieu: 50, van_dung: 25, van_dung_cao: 0 }
+      },
+      {
+        id: 'sec-3',
+        title: 'Phần III: Câu hỏi trắc nghiệm trả lời ngắn (Điền kết quả số)',
+        questionType: 'short_answer',
+        questionCount: 6,
+        pointsPerQuestion: 0.5,
+        difficultyRatio: { nhan_biet: 0, thong_hieu: 30, van_dung: 50, van_dung_cao: 20 }
+      }
+    ],
+    shuffleQuestions: true,
+    shuffleOptions: true,
+    allowReusedQuestions: false,
+    version: 1,
+    isSystem: true,
+    createdAt: '2026-10-01T00:00:00.000Z'
+  },
+  {
+    id: 'tmpl-kiem-tra-15p',
+    name: 'Đề kiểm tra nhanh 15 phút (Đa môn)',
+    description: 'Gồm 10 câu trắc nghiệm nhận biết và thông hiểu để đánh giá nhanh đầu giờ hoặc kết thúc bài học.',
+    subjectId: 'sub-toan',
+    subjectName: 'Toán học',
+    gradeLevel: 'Lớp 12',
+    totalQuestions: 10,
+    durationMinutes: 15,
+    totalPoints: 10,
+    sections: [
+      {
+        id: 'sec-15p-1',
+        title: 'Trắc nghiệm kiến thức trọng tâm',
+        questionType: 'single_choice',
+        questionCount: 10,
+        pointsPerQuestion: 1.0,
+        difficultyRatio: { nhan_biet: 60, thong_hieu: 40, van_dung: 0, van_dung_cao: 0 }
+      }
+    ],
+    shuffleQuestions: true,
+    shuffleOptions: true,
+    allowReusedQuestions: true,
+    version: 1,
+    isSystem: true,
+    createdAt: '2026-10-01T00:00:00.000Z'
+  },
+  {
+    id: 'tmpl-giua-ky-hoa',
+    name: 'Đề kiểm tra Giữa học kỳ I - Hóa học 12',
+    description: 'Kết hợp trắc nghiệm 1 đáp án, nhiều đáp án và đúng sai kiểm tra Este, Carbohydrate và Amine.',
+    subjectId: 'sub-hoa',
+    subjectName: 'Hóa học',
+    gradeLevel: 'Lớp 12',
+    totalQuestions: 28,
+    durationMinutes: 45,
+    totalPoints: 10,
+    sections: [
+      {
+        id: 'sec-hoa-1',
+        title: 'Phần I: Trắc nghiệm một lựa chọn',
+        questionType: 'single_choice',
+        questionCount: 18,
+        pointsPerQuestion: 0.25,
+        difficultyRatio: { nhan_biet: 40, thong_hieu: 40, van_dung: 20, van_dung_cao: 0 }
+      },
+      {
+        id: 'sec-hoa-2',
+        title: 'Phần II: Trắc nghiệm Đúng / Sai',
+        questionType: 'true_false',
+        questionCount: 4,
+        pointsPerQuestion: 1.0,
+        trueFalseCountMode: 'per_question',
+        difficultyRatio: { nhan_biet: 25, thong_hieu: 50, van_dung: 25, van_dung_cao: 0 }
+      },
+      {
+        id: 'sec-hoa-3',
+        title: 'Phần III: Trả lời ngắn tính toán hóa học',
+        questionType: 'short_answer',
+        questionCount: 6,
+        pointsPerQuestion: 0.25,
+        difficultyRatio: { nhan_biet: 0, thong_hieu: 30, van_dung: 50, van_dung_cao: 20 }
+      }
+    ],
+    shuffleQuestions: true,
+    shuffleOptions: true,
+    allowReusedQuestions: false,
+    version: 1,
+    isSystem: true,
+    createdAt: '2026-10-01T00:00:00.000Z'
+  }
+];
+
+const INITIAL_DOCUMENTS: SourceDocument[] = [
+  {
+    id: 'doc-seed-01',
+    fileName: 'De_Thi_Thu_Tot_Nghiep_THPT_2026_Toan.pdf',
+    fileSize: 2450000,
+    fileType: 'application/pdf',
+    uploadedAt: '2026-10-10T07:45:00.000Z',
+    pageCount: 6,
+    status: 'completed',
+    progress: 100,
+    isScan: false,
+    extractedQuestionsCount: 22,
+    subjectId: 'sub-toan',
+    topicsFound: ['Đơn điệu hàm số', 'Cực trị', 'Giá trị lớn nhất, nhỏ nhất', 'Tiệm cận', 'Hình học Oxyz'],
+    summary: 'Đề thi thử tốt nghiệp THPT năm 2026 môn Toán gồm 3 phần: Trắc nghiệm, Đúng/Sai và Trả lời ngắn.'
+  },
+  {
+    id: 'doc-seed-02',
+    fileName: 'De_Kiem_Tra_Dinh_Ky_Vat_Ly_12.docx',
+    fileSize: 890000,
+    fileType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    uploadedAt: '2026-10-11T08:50:00.000Z',
+    pageCount: 4,
+    status: 'completed',
+    progress: 100,
+    isScan: false,
+    extractedQuestionsCount: 18,
+    subjectId: 'sub-ly',
+    topicsFound: ['Vật lý nhiệt', 'Khí lý tưởng', 'Định luật Boyle'],
+    summary: 'Đề kiểm tra định kỳ chuyên đề nhiệt động lực học và khí lý tưởng chương trình mới.'
+  },
+  {
+    id: 'doc-seed-03',
+    fileName: 'Ngan_Hang_Cau_Hoi_Hoa_Hoc_12.docx',
+    fileSize: 1250000,
+    fileType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    uploadedAt: '2026-10-12T09:40:00.000Z',
+    pageCount: 8,
+    status: 'completed',
+    progress: 100,
+    isScan: false,
+    extractedQuestionsCount: 30,
+    subjectId: 'sub-hoa',
+    topicsFound: ['Este - Lipit - Xà phòng', 'Carbohydrate', 'Amine'],
+    summary: 'Ngân hàng tổng hợp câu hỏi Hóa 12 có đủ các dạng 1 lựa chọn, nhiều lựa chọn, đúng sai.'
+  }
+];
+
+class DatabaseManager {
+  private data: DatabaseSchema;
+
+  constructor() {
+    this.data = this.loadData();
+  }
+
+  private loadData(): DatabaseSchema {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        const fileContent = fs.readFileSync(DB_FILE, 'utf-8');
+        return JSON.parse(fileContent);
+      } catch (err) {
+        console.error('Failed to read db.json, re-initializing seed data:', err);
+      }
+    }
+
+    // Default Seed State
+    const initialData: DatabaseSchema = {
+      questions: INITIAL_QUESTIONS,
+      documents: INITIAL_DOCUMENTS,
+      subjectRules: INITIAL_SUBJECT_RULES,
+      templates: INITIAL_TEMPLATES,
+      exams: [],
+      submissions: [],
+      auditLogs: [
+        {
+          id: 'log-1',
+          timestamp: new Date().toISOString(),
+          action: 'KHỞI_TẠO_HỆ_THỐNG',
+          user: 'Quản trị viên',
+          details: 'Khởi tạo ngân hàng câu hỏi chuẩn GDPT 2018 và quy tắc môn học'
+        }
+      ]
+    };
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), 'utf-8');
+    return initialData;
+  }
+
+  public save(): void {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving database:', err);
+    }
+  }
+
+  public logAudit(action: string, user: string, details: string) {
+    this.data.auditLogs.unshift({
+      id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      timestamp: new Date().toISOString(),
+      action,
+      user,
+      details
+    });
+    if (this.data.auditLogs.length > 200) {
+      this.data.auditLogs = this.data.auditLogs.slice(0, 200);
+    }
+  }
+
+  // Getters
+  public getQuestions(): Question[] {
+    return this.data.questions;
+  }
+
+  public getDocuments(): SourceDocument[] {
+    return this.data.documents;
+  }
+
+  public getSubjectRules(): SubjectRule[] {
+    return this.data.subjectRules;
+  }
+
+  public getTemplates(): ExamTemplate[] {
+    return this.data.templates;
+  }
+
+  public getExams(): Exam[] {
+    return this.data.exams;
+  }
+
+  public getSubmissions(): ExamSubmission[] {
+    return this.data.submissions;
+  }
+
+  public getAuditLogs() {
+    return this.data.auditLogs;
+  }
+
+  // Mutation helpers
+  public addQuestions(newQuestions: Question[]) {
+    this.data.questions.unshift(...newQuestions);
+    this.save();
+  }
+
+  public updateQuestion(id: string, updates: Partial<Question>): Question | null {
+    const idx = this.data.questions.findIndex((q) => q.id === id);
+    if (idx === -1) return null;
+    this.data.questions[idx] = {
+      ...this.data.questions[idx],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    this.save();
+    return this.data.questions[idx];
+  }
+
+  public deleteQuestion(id: string): boolean {
+    const prevLen = this.data.questions.length;
+    this.data.questions = this.data.questions.filter((q) => q.id !== id);
+    if (this.data.questions.length !== prevLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  public addDocument(doc: SourceDocument) {
+    this.data.documents.unshift(doc);
+    this.save();
+  }
+
+  public updateDocument(id: string, updates: Partial<SourceDocument>): SourceDocument | null {
+    const idx = this.data.documents.findIndex((d) => d.id === id);
+    if (idx === -1) return null;
+    this.data.documents[idx] = { ...this.data.documents[idx], ...updates };
+    this.save();
+    return this.data.documents[idx];
+  }
+
+  public deleteDocument(id: string): boolean {
+    const prevLen = this.data.documents.length;
+    this.data.documents = this.data.documents.filter((d) => d.id !== id);
+    if (this.data.documents.length !== prevLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  public addExam(exam: Exam) {
+    this.data.exams.unshift(exam);
+    this.save();
+  }
+
+  public updateExam(id: string, updates: Partial<Exam>): Exam | null {
+    const idx = this.data.exams.findIndex((e) => e.id === id);
+    if (idx === -1) return null;
+    this.data.exams[idx] = { ...this.data.exams[idx], ...updates, updatedAt: new Date().toISOString() };
+    this.save();
+    return this.data.exams[idx];
+  }
+
+  public deleteExam(id: string): boolean {
+    const prevLen = this.data.exams.length;
+    this.data.exams = this.data.exams.filter((e) => e.id !== id);
+    if (this.data.exams.length !== prevLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  public addTemplate(template: ExamTemplate) {
+    this.data.templates.unshift(template);
+    this.save();
+  }
+
+  public updateTemplate(id: string, updates: Partial<ExamTemplate>): ExamTemplate | null {
+    const idx = this.data.templates.findIndex((t) => t.id === id);
+    if (idx === -1) return null;
+    this.data.templates[idx] = { ...this.data.templates[idx], ...updates };
+    this.save();
+    return this.data.templates[idx];
+  }
+
+  public deleteTemplate(id: string): boolean {
+    const prevLen = this.data.templates.length;
+    this.data.templates = this.data.templates.filter((t) => t.id !== id);
+    if (this.data.templates.length !== prevLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  public updateSubjectRule(id: string, updates: Partial<SubjectRule>): SubjectRule | null {
+    const idx = this.data.subjectRules.findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    this.data.subjectRules[idx] = { ...this.data.subjectRules[idx], ...updates };
+    this.save();
+    return this.data.subjectRules[idx];
+  }
+
+  public addSubmission(submission: ExamSubmission) {
+    this.data.submissions.unshift(submission);
+    this.save();
+  }
+
+  public updateSubmission(id: string, updates: Partial<ExamSubmission>): ExamSubmission | null {
+    const idx = this.data.submissions.findIndex((s) => s.id === id);
+    if (idx === -1) return null;
+    this.data.submissions[idx] = { ...this.data.submissions[idx], ...updates };
+    this.save();
+    return this.data.submissions[idx];
+  }
+
+  public getDashboardStats(): DashboardStats {
+    const q = this.data.questions;
+    const questionsByType: Record<string, number> = {
+      single_choice: 0,
+      multiple_choice: 0,
+      true_false: 0,
+      short_answer: 0,
+      essay: 0,
+      matching_or_fill: 0
+    };
+    const questionsByDifficulty: Record<string, number> = {
+      nhan_biet: 0,
+      thong_hieu: 0,
+      van_dung: 0,
+      van_dung_cao: 0
+    };
+
+    let verified = 0;
+    let needsReview = 0;
+    let aiGen = 0;
+
+    for (const item of q) {
+      if (questionsByType[item.questionType] !== undefined) {
+        questionsByType[item.questionType]++;
+      }
+      if (questionsByDifficulty[item.difficulty] !== undefined) {
+        questionsByDifficulty[item.difficulty]++;
+      }
+      if (item.verificationStatus === 'verified') verified++;
+      else if (item.verificationStatus === 'needs_review' || item.verificationStatus === 'extracted') needsReview++;
+      else if (item.verificationStatus === 'ai_generated') aiGen++;
+    }
+
+    const totalSolvedExams = this.data.exams.filter((e) => e.solve_status === 'completed').length;
+    const pendingTeacherReview = this.data.submissions.filter((s) => s.grading_status === 'needs_teacher_review').length;
+
+    return {
+      totalDocuments: this.data.documents.length,
+      totalQuestions: q.length,
+      questionsByType: questionsByType as any,
+      questionsByDifficulty: questionsByDifficulty as any,
+      verifiedQuestions: verified,
+      needsReviewQuestions: needsReview,
+      aiGeneratedQuestions: aiGen,
+      totalExams: this.data.exams.length,
+      totalTemplates: this.data.templates.length,
+      totalGradedSubmissions: this.data.submissions.length,
+      pendingTeacherReviewSubmissions: pendingTeacherReview,
+      totalSolvedExams
+    };
+  }
+}
+
+export const db = new DatabaseManager();

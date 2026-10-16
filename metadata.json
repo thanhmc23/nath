@@ -1,0 +1,8 @@
+{
+  "name": "AI Exam Bank – Ngân hàng Đề thi & Tạo đề Tự động",
+  "description": "Hệ thống AI phân tích tài liệu đề thi, trích xuất và chuẩn hóa câu hỏi, quản lý ngân hàng câu hỏi đa dạng và tự động tạo đề thi theo ma trận chuẩn.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
